@@ -18,6 +18,37 @@
 #endif
 
 #define PORT 9000
+#define HEADER_SIZE 3
+
+static int receive_all(SOCKET socket_fd, char *buffer, int size)
+{
+    int received = 0;
+
+    while (received < size) {
+        int bytes = recv(socket_fd, buffer + received, size - received, 0);
+        if (bytes <= 0) {
+            return 0;
+        }
+        received += bytes;
+    }
+
+    return 1;
+}
+
+static int send_all(SOCKET socket_fd, const char *buffer, int size)
+{
+    int sent = 0;
+
+    while (sent < size) {
+        int bytes = send(socket_fd, buffer + sent, size - sent, 0);
+        if (bytes <= 0) {
+            return 0;
+        }
+        sent += bytes;
+    }
+
+    return 1;
+}
 
 int main(void)
 {
@@ -62,6 +93,33 @@ int main(void)
     }
 
     printf("Cliente conectado.\n");
+
+    unsigned char header[HEADER_SIZE];
+    if (!receive_all(client_socket, (char *)header, HEADER_SIZE)) {
+        printf("No se pudo recibir el mensaje.\n");
+        CLOSE_SOCKET(client_socket);
+        CLOSE_SOCKET(server_socket);
+        return 1;
+    }
+
+    unsigned short payload_size =
+        (unsigned short)((header[1] << 8) | header[2]);
+    if (header[0] != MESSAGE_HELLO || payload_size != 0) {
+        printf("Mensaje no reconocido.\n");
+        CLOSE_SOCKET(client_socket);
+        CLOSE_SOCKET(server_socket);
+        return 1;
+    }
+
+    unsigned char response[HEADER_SIZE] = {MESSAGE_ACK, 0, 0};
+    if (!send_all(client_socket, (const char *)response, HEADER_SIZE)) {
+        printf("No se pudo enviar la respuesta.\n");
+        CLOSE_SOCKET(client_socket);
+        CLOSE_SOCKET(server_socket);
+        return 1;
+    }
+
+    printf("Mensaje HELLO recibido. Respuesta ACK enviada.\n");
     CLOSE_SOCKET(client_socket);
     CLOSE_SOCKET(server_socket);
 

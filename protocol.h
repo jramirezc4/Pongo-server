@@ -2,8 +2,9 @@
 #define PROTOCOL_H
 
 /*
- * Tipos de mensajes que usara el protocolo de Pong.
- * Por ahora solo se dejan definidos para documentar la idea inicial.
+ * Cada mensaje usa este formato:
+ *
+ *   [tipo: 1 byte][longitud: 2 bytes en orden de red][carga útil]
  */
 #define MESSAGE_REGISTER 1
 #define MESSAGE_MOVE_UP 2
@@ -11,5 +12,7 @@
 #define MESSAGE_GAME_STATE 4
 #define MESSAGE_SCORE 5
 #define MESSAGE_ERROR 6
+#define MESSAGE_HELLO 7
+#define MESSAGE_ACK 8
 
 #endif

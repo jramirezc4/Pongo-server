@@ -4,8 +4,8 @@ Proyecto de redes para construir un juego Pong con arquitectura cliente/servidor
 
 ## Estado actual
 
-Este es el primer avance del proyecto. Se creo la estructura inicial y se dejaron
-definidos los tipos de mensajes que usara el protocolo.
+El servidor acepta una conexion TCP y el cliente puede enviar un mensaje binario
+`HELLO` para recibir una respuesta `ACK`.
 
 ## Tecnologias
 
@@ -31,19 +31,36 @@ make
 
 ## Ejecucion actual
 
-Por ahora, el servidor solo muestra un mensaje inicial:
+Primero se inicia el servidor:
 
 ```bash
 ./server
 ```
 
-El cliente se puede ejecutar con:
+En otra terminal se ejecuta el cliente:
 
 ```bash
 python3 client.py
 ```
 
-La comunicacion de red y el juego se implementaran en los siguientes avances.
+El cliente se conecta por defecto a `127.0.0.1:9000`, muestra los mensajes de
+conexion y desconexion, y termina despues de cerrar el socket. Tambien se puede
+indicar otro servidor o puerto:
+
+```bash
+python3 client.py --host 127.0.0.1 --port 9000
+```
+
+## Protocolo binario inicial
+
+Los mensajes usan un encabezado de 3 bytes:
+
+- 1 byte para el tipo de mensaje.
+- 2 bytes para la longitud de la carga útil, en orden de red.
+- La carga útil, si existe.
+
+En esta primera prueba, el cliente envía `HELLO` sin carga útil y el servidor
+responde `ACK` sin carga útil.
 
 ## Autores
 
