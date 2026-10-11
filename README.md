@@ -4,8 +4,9 @@ Proyecto de redes para construir un juego Pong con arquitectura cliente/servidor
 
 ## Estado actual
 
-El servidor acepta una conexion TCP y el cliente puede enviar un mensaje binario
-`HELLO` para recibir una respuesta `ACK`.
+El servidor acepta conexiones TCP, responde a `HELLO` con `ACK`, recibe el
+registro del jugador con nickname y correo, valida la entrada y luego envía un
+estado inicial sencillo del juego con la posicion de las paletas y la pelota.
 
 ## Tecnologias
 
@@ -51,7 +52,7 @@ indicar otro servidor o puerto:
 python3 client.py --host 127.0.0.1 --port 9000
 ```
 
-## Protocolo binario inicial
+## Protocolo binario actual
 
 Los mensajes usan un encabezado de 3 bytes:
 
@@ -59,8 +60,25 @@ Los mensajes usan un encabezado de 3 bytes:
 - 2 bytes para la longitud de la carga útil, en orden de red.
 - La carga útil, si existe.
 
-En esta primera prueba, el cliente envía `HELLO` sin carga útil y el servidor
-responde `ACK` sin carga útil.
+El cliente ahora realiza estas etapas:
+
+1. Envía `HELLO` sin carga útil.
+2. Recibe `ACK` del servidor.
+3. Solicita nickname y correo para registrarse.
+4. Envía el registro como `REGISTER` con una carga útil en formato
+   `nickname\0correo\0`.
+5. El servidor responde con `ACK` o `ERROR`.
+6. Si el registro es valido, el servidor envía el estado inicial del juego con la
+   posicion de las paletas y la pelota.
+
+El estado inicial se codifica como 6 bytes sencillos:
+
+- paleta izquierda
+- paleta derecha
+- posicion X de la pelota
+- posicion Y de la pelota
+- velocidad X de la pelota
+- velocidad Y de la pelota
 
 ## Autores
 

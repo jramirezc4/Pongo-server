@@ -15,4 +15,9 @@
 #define MESSAGE_HELLO 7
 #define MESSAGE_ACK 8
 
+#define GAME_WIDTH 20
+#define GAME_HEIGHT 10
+#define PADDLE_HEIGHT 4
+#define INITIAL_PADDLE_Y 3
+
 #endif
