@@ -4,9 +4,10 @@ Proyecto de redes para construir un juego Pong con arquitectura cliente/servidor
 
 ## Estado actual
 
-El servidor acepta conexiones TCP, responde a `HELLO` con `ACK`, recibe el
-registro del jugador con nickname y correo, valida la entrada y luego envía un
-estado inicial sencillo del juego con la posicion de las paletas y la pelota.
+El servidor acepta hasta dos conexiones TCP, empareja los jugadores por orden
+de llegada, valida el registro y mantiene un estado basico del juego. Recibe
+movimientos, limita las paletas, mueve la pelota, detecta puntos y envia
+actualizaciones periodicas a los clientes.
 
 ## Tecnologias
 
@@ -41,7 +42,15 @@ Primero se inicia el servidor:
 En otra terminal se ejecuta el cliente:
 
 ```bash
-python3 client.py
+python3 client.py --nickname ana --email ana@correo.com
+```
+
+Para probar dos jugadores en la misma maquina, se ejecutan dos clientes en
+terminales separadas:
+
+```bash
+python3 client.py --nickname ana --email ana@correo.com --move down
+python3 client.py --nickname juan --email juan@correo.com --move up
 ```
 
 El cliente se conecta por defecto a `127.0.0.1:9000`, muestra los mensajes de
@@ -60,7 +69,7 @@ Los mensajes usan un encabezado de 3 bytes:
 - 2 bytes para la longitud de la carga útil, en orden de red.
 - La carga útil, si existe.
 
-El cliente ahora realiza estas etapas:
+El cliente realiza estas etapas:
 
 1. Envía `HELLO` sin carga útil.
 2. Recibe `ACK` del servidor.
@@ -68,10 +77,15 @@ El cliente ahora realiza estas etapas:
 4. Envía el registro como `REGISTER` con una carga útil en formato
    `nickname\0correo\0`.
 5. El servidor responde con `ACK` o `ERROR`.
-6. Si el registro es valido, el servidor envía el estado inicial del juego con la
-   posicion de las paletas y la pelota.
+6. Si el registro es valido, el servidor envía el estado inicial y luego
+   actualizaciones periódicas.
 
-El estado inicial se codifica como 6 bytes sencillos:
+Los mensajes `MOVE_UP` y `MOVE_DOWN` no tienen carga útil. El servidor valida
+que cada paleta permanezca dentro del tablero. El estado del juego ahora tiene
+8 bytes: las seis posiciones/velocidades anteriores y los puntajes izquierdo y
+derecho.
+
+El estado del juego se codifica como 8 bytes sencillos:
 
 - paleta izquierda
 - paleta derecha
@@ -79,6 +93,8 @@ El estado inicial se codifica como 6 bytes sencillos:
 - posicion Y de la pelota
 - velocidad X de la pelota
 - velocidad Y de la pelota
+- puntaje izquierdo
+- puntaje derecho
 
 ## Autores
 

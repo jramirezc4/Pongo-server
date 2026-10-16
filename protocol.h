@@ -19,5 +19,6 @@
 #define GAME_HEIGHT 10
 #define PADDLE_HEIGHT 4
 #define INITIAL_PADDLE_Y 3
+#define GAME_STATE_SIZE 8
 
 #endif
