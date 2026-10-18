@@ -22,6 +22,7 @@ actualizaciones periodicas a los clientes.
 - `client.py`: programa cliente.
 - `Makefile`: instrucciones para compilar el servidor.
 - `logs/`: carpeta para los archivos de registro.
+- `tests/`: pruebas automaticas pequenas del protocolo del cliente.
 
 ## Compilacion
 
@@ -95,6 +96,26 @@ El estado del juego se codifica como 8 bytes sencillos:
 - velocidad Y de la pelota
 - puntaje izquierdo
 - puntaje derecho
+
+## Registro y pruebas
+
+El servidor imprime los eventos importantes en la terminal y los guarda en
+`logs/server.log`. Se registran conexiones, registros de jugadores,
+movimientos, puntos, rechazos y desconexiones.
+
+Para ejecutar las pruebas automaticas del protocolo:
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+Para una prueba manual completa:
+
+1. Compilar e iniciar el servidor.
+2. Conectar dos clientes con nicknames y correos diferentes.
+3. Usar `--move up` y `--move down` para generar movimientos.
+4. Observar los estados y el marcador durante unos segundos.
+5. Cerrar los clientes y revisar `logs/server.log`.
 
 ## Autores
 

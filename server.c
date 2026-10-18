@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -47,6 +48,54 @@ struct Client {
     int side;
     char nickname[64];
 };
+
+static FILE *log_file;
+
+static int initialize_logger(void)
+{
+    log_file = fopen("logs/server.log", "a");
+    if (log_file == NULL) {
+        fprintf(stderr, "No se pudo abrir logs/server.log.\n");
+        return 0;
+    }
+    return 1;
+}
+
+static void close_logger(void)
+{
+    if (log_file != NULL) {
+        fclose(log_file);
+        log_file = NULL;
+    }
+}
+
+static void log_event(const char *format, ...)
+{
+    char timestamp[32];
+    time_t current_time = time(NULL);
+    struct tm *local_time = localtime(&current_time);
+    va_list arguments;
+
+    if (local_time == NULL) {
+        return;
+    }
+
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", local_time);
+    printf("[%s] ", timestamp);
+    va_start(arguments, format);
+    vprintf(format, arguments);
+    va_end(arguments);
+    printf("\n");
+
+    if (log_file != NULL) {
+        fprintf(log_file, "[%s] ", timestamp);
+        va_start(arguments, format);
+        vfprintf(log_file, format, arguments);
+        va_end(arguments);
+        fprintf(log_file, "\n");
+        fflush(log_file);
+    }
+}
 
 static int receive_all(SOCKET socket_fd, char *buffer, int size)
 {
@@ -189,8 +238,8 @@ static int registered_count(struct Client clients[MAX_CLIENTS])
 static void disconnect_client(struct Client *client)
 {
     if (client->connected) {
-        printf("Jugador desconectado: %s\n",
-               client->nickname[0] ? client->nickname : "sin registrar");
+        log_event("Jugador desconectado: %s",
+                  client->nickname[0] ? client->nickname : "sin registrar");
         CLOSE_SOCKET(client->socket_fd);
     }
     memset(client, 0, sizeof(*client));
@@ -227,18 +276,20 @@ static int parse_registration(struct Client *client,
     strncpy(client->nickname, buffer, sizeof(client->nickname) - 1);
     client->nickname[sizeof(client->nickname) - 1] = '\0';
     client->registered = 1;
-    printf("Jugador %d registrado: %s\n", client->side + 1, client->nickname);
+    log_event("Jugador %d registrado: %s", client->side + 1, client->nickname);
     return send_message(client->socket_fd, MESSAGE_ACK, NULL, 0);
 }
 
-static void move_paddle(struct Client *client, struct GameState *state,
-                        unsigned char message_type)
+static int move_paddle(struct Client *client, struct GameState *state,
+                       unsigned char message_type)
 {
     unsigned char *paddle;
+    unsigned char previous_position;
 
     paddle = client->side == 0
         ? &state->left_paddle_y
         : &state->right_paddle_y;
+    previous_position = *paddle;
 
     if (message_type == MESSAGE_MOVE_UP && *paddle > 0) {
         (*paddle)--;
@@ -246,9 +297,10 @@ static void move_paddle(struct Client *client, struct GameState *state,
                *paddle + PADDLE_HEIGHT < GAME_HEIGHT) {
         (*paddle)++;
     }
+    return *paddle != previous_position;
 }
 
-static void update_ball(struct GameState *state)
+static int update_ball(struct GameState *state)
 {
     int next_x = state->ball_x + state->ball_dx;
     int next_y = state->ball_y + state->ball_dy;
@@ -266,7 +318,7 @@ static void update_ball(struct GameState *state)
         } else {
             state->right_score++;
             reset_ball(state, 1);
-            return;
+            return 2;
         }
     } else if (next_x >= GAME_WIDTH - 1) {
         if (next_y >= state->right_paddle_y &&
@@ -276,12 +328,13 @@ static void update_ball(struct GameState *state)
         } else {
             state->left_score++;
             reset_ball(state, -1);
-            return;
+            return 1;
         }
     }
 
     state->ball_x = (unsigned char)next_x;
     state->ball_y = (unsigned char)next_y;
+    return 0;
 }
 
 static int handle_client_message(struct Client clients[MAX_CLIENTS],
@@ -309,6 +362,7 @@ static int handle_client_message(struct Client clients[MAX_CLIENTS],
     }
 
     if (header[0] == MESSAGE_HELLO && payload_size == 0) {
+        log_event("HELLO recibido del jugador %d.", client->side + 1);
         result = send_message(client->socket_fd, MESSAGE_ACK, NULL, 0);
     } else if (header[0] == MESSAGE_REGISTER && !client->registered) {
         result = parse_registration(client, payload, payload_size);
@@ -318,9 +372,14 @@ static int handle_client_message(struct Client clients[MAX_CLIENTS],
     } else if (client->registered &&
                (header[0] == MESSAGE_MOVE_UP || header[0] == MESSAGE_MOVE_DOWN) &&
                payload_size == 0) {
-        move_paddle(client, state, header[0]);
+        int moved = move_paddle(client, state, header[0]);
+        log_event("Movimiento %s de %s: %s.",
+                  header[0] == MESSAGE_MOVE_UP ? "arriba" : "abajo",
+                  client->nickname,
+                  moved ? "aceptado" : "limite alcanzado");
         broadcast_state(clients, state);
     } else {
+        log_event("Mensaje no soportado del jugador %d.", client->side + 1);
         send_error(client->socket_fd, "Mensaje no soportado.");
     }
 
@@ -336,11 +395,19 @@ int main(void)
     struct GameState state;
     int index;
     int last_tick;
+    int point_winner;
 
 #ifdef _WIN32
     WSADATA data;
     WSAStartup(MAKEWORD(2, 2), &data);
 #endif
+
+    if (!initialize_logger()) {
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        return 1;
+    }
 
     memset(clients, 0, sizeof(clients));
     for (index = 0; index < MAX_CLIENTS; index++) {
@@ -350,7 +417,8 @@ int main(void)
 
     server_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (server_socket == INVALID_SOCKET) {
-        printf("No se pudo crear el socket.\n");
+        log_event("No se pudo crear el socket.");
+        close_logger();
         return 1;
     }
 
@@ -362,13 +430,14 @@ int main(void)
     if (bind(server_socket, (struct sockaddr *)&server_address,
              sizeof(server_address)) < 0 ||
         listen(server_socket, MAX_CLIENTS) < 0) {
-        printf("No se pudo iniciar el servidor en el puerto %d.\n", PORT);
+        log_event("No se pudo iniciar el servidor en el puerto %d.", PORT);
         CLOSE_SOCKET(server_socket);
+        close_logger();
         return 1;
     }
 
-    printf("Servidor Pong escuchando en el puerto %d.\n", PORT);
-    printf("Esperando hasta %d jugadores...\n", MAX_CLIENTS);
+    log_event("Servidor Pong escuchando en el puerto %d.", PORT);
+    log_event("Esperando hasta %d jugadores.", MAX_CLIENTS);
     last_tick = (int)time(NULL);
 
     while (1) {
@@ -392,7 +461,7 @@ int main(void)
         timeout.tv_usec = GAME_TICK_MS * 1000;
         ready = select((int)max_socket + 1, &read_set, NULL, NULL, &timeout);
         if (ready < 0) {
-            printf("Error al esperar conexiones: %d\n", SOCKET_ERROR_CODE);
+            log_event("Error al esperar conexiones: %d", SOCKET_ERROR_CODE);
             break;
         }
 
@@ -404,8 +473,9 @@ int main(void)
                 clients[free_index].socket_fd = client_socket;
                 clients[free_index].connected = 1;
                 clients[free_index].side = free_index;
-                printf("Conexion recibida para jugador %d.\n", free_index + 1);
+                log_event("Conexion recibida para jugador %d.", free_index + 1);
             } else if (client_socket != INVALID_SOCKET) {
+                log_event("Conexion rechazada: la partida esta llena.");
                 send_error(client_socket, "La partida ya esta llena.");
                 CLOSE_SOCKET(client_socket);
             }
@@ -422,7 +492,14 @@ int main(void)
         if ((int)time(NULL) != last_tick) {
             last_tick = (int)time(NULL);
             if (registered_count(clients) > 0) {
-                update_ball(&state);
+                point_winner = update_ball(&state);
+                if (point_winner == 1) {
+                    log_event("Punto para el jugador izquierdo. Marcador %d-%d.",
+                              state.left_score, state.right_score);
+                } else if (point_winner == 2) {
+                    log_event("Punto para el jugador derecho. Marcador %d-%d.",
+                              state.left_score, state.right_score);
+                }
                 broadcast_state(clients, &state);
             }
         }
@@ -432,6 +509,7 @@ int main(void)
         disconnect_client(&clients[index]);
     }
     CLOSE_SOCKET(server_socket);
+    close_logger();
 
 #ifdef _WIN32
     WSACleanup();
