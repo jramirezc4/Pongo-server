@@ -1,4 +1,4 @@
-#include <stdio.h>
+﻿#include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,7 +8,7 @@
 
 #ifdef _WIN32
 #include <winsock2.h>
-#define CLOSE_SOCKET(socket_fd) closesocket(socket_fd)
+#define CLOSE_SOCKET(descriptor_socket) closesocket(descriptor_socket)
 #define SOCKET_ERROR_CODE WSAGetLastError()
 #else
 #include <arpa/inet.h>
@@ -21,495 +21,543 @@
 #define SOCKET int
 #define INVALID_SOCKET -1
 #define SOCKET_ERROR_CODE errno
-#define CLOSE_SOCKET(socket_fd) close(socket_fd)
+#define CLOSE_SOCKET(descriptor_socket) close(descriptor_socket)
 #endif
 
-#define PORT 9000
-#define HEADER_SIZE 3
-#define MAX_MESSAGE_SIZE 256
-#define MAX_CLIENTS 2
-#define GAME_TICK_MS 250
+#define TAMANO_ENCABEZADO 3
+#define TAMANO_MAXIMO_MENSAJE 256
+#define MAXIMO_JUGADORES 2
+#define INTERVALO_JUEGO_MS 250
 
-struct GameState {
-    unsigned char left_paddle_y;
-    unsigned char right_paddle_y;
-    unsigned char ball_x;
-    unsigned char ball_y;
-    signed char ball_dx;
-    signed char ball_dy;
-    unsigned char left_score;
-    unsigned char right_score;
+struct EstadoJuego {
+    unsigned char paleta_izquierda_y;
+    unsigned char paleta_derecha_y;
+    unsigned char pelota_x;
+    unsigned char pelota_y;
+    signed char pelota_dx;
+    signed char pelota_dy;
+    unsigned char marcador_izquierdo;
+    unsigned char marcador_derecho;
 };
 
-struct Client {
-    SOCKET socket_fd;
-    int connected;
-    int registered;
-    int side;
-    char nickname[64];
+struct Cliente {
+    SOCKET descriptor_socket;
+    int conectado;
+    int registrado;
+    int lado;
+    char apodo[64];
 };
 
-static FILE *log_file;
+static FILE *archivo_registro;
 
-static int initialize_logger(void)
+static const char *nombre_tipo_mensaje(unsigned char tipo)
 {
-    log_file = fopen("logs/server.log", "a");
-    if (log_file == NULL) {
-        fprintf(stderr, "No se pudo abrir logs/server.log.\n");
+    switch (tipo) {
+    case MENSAJE_REGISTRO:
+        return "REGISTRO";
+    case MENSAJE_MOVER_ARRIBA:
+        return "MOVER_ARRIBA";
+    case MENSAJE_MOVER_ABAJO:
+        return "MOVER_ABAJO";
+    case MENSAJE_ESTADO_JUEGO:
+        return "ESTADO_JUEGO";
+    case MENSAJE_MARCADOR:
+        return "MARCADOR";
+    case MENSAJE_ERROR:
+        return "ERROR";
+    case MENSAJE_SALUDO:
+        return "SALUDO";
+    case MENSAJE_CONFIRMACION:
+        return "CONFIRMACION";
+    default:
+        return "DESCONOCIDO";
+    }
+}
+
+static int iniciar_registro(const char *ruta_archivo)
+{
+    archivo_registro = fopen(ruta_archivo, "a");
+    if (archivo_registro == NULL) {
+        fprintf(stderr, "No se pudo abrir el archivo de registro: %s\n",
+                ruta_archivo);
         return 0;
     }
     return 1;
 }
 
-static void close_logger(void)
+static void cerrar_registro(void)
 {
-    if (log_file != NULL) {
-        fclose(log_file);
-        log_file = NULL;
+    if (archivo_registro != NULL) {
+        fclose(archivo_registro);
+        archivo_registro = NULL;
     }
 }
 
-static void log_event(const char *format, ...)
+static void registrar_evento(const char *formato, ...)
 {
-    char timestamp[32];
-    time_t current_time = time(NULL);
-    struct tm *local_time = localtime(&current_time);
-    va_list arguments;
+    char marca_tiempo[32];
+    time_t hora_actual = time(NULL);
+    struct tm *hora_local = localtime(&hora_actual);
+    va_list argumentos;
 
-    if (local_time == NULL) {
+    if (hora_local == NULL) {
         return;
     }
 
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", local_time);
-    printf("[%s] ", timestamp);
-    va_start(arguments, format);
-    vprintf(format, arguments);
-    va_end(arguments);
+    strftime(marca_tiempo, sizeof(marca_tiempo), "%Y-%m-%d %H:%M:%S", hora_local);
+    printf("[%s] ", marca_tiempo);
+    va_start(argumentos, formato);
+    vprintf(formato, argumentos);
+    va_end(argumentos);
     printf("\n");
 
-    if (log_file != NULL) {
-        fprintf(log_file, "[%s] ", timestamp);
-        va_start(arguments, format);
-        vfprintf(log_file, format, arguments);
-        va_end(arguments);
-        fprintf(log_file, "\n");
-        fflush(log_file);
+    if (archivo_registro != NULL) {
+        fprintf(archivo_registro, "[%s] ", marca_tiempo);
+        va_start(argumentos, formato);
+        vfprintf(archivo_registro, formato, argumentos);
+        va_end(argumentos);
+        fprintf(archivo_registro, "\n");
+        fflush(archivo_registro);
     }
 }
 
-static int receive_all(SOCKET socket_fd, char *buffer, int size)
+static int recibir_todo(SOCKET descriptor_socket, char *bufer, int tamano)
 {
-    int received = 0;
+    int recibidos = 0;
 
-    while (received < size) {
-        int bytes = recv(socket_fd, buffer + received, size - received, 0);
+    while (recibidos < tamano) {
+        int bytes = recv(descriptor_socket, bufer + recibidos, tamano - recibidos, 0);
         if (bytes <= 0) {
             return 0;
         }
-        received += bytes;
+        recibidos += bytes;
     }
 
     return 1;
 }
 
-static int send_all(SOCKET socket_fd, const char *buffer, int size)
+static int enviar_todo(SOCKET descriptor_socket, const char *bufer, int tamano)
 {
-    int sent = 0;
+    int enviados = 0;
 
-    while (sent < size) {
-        int bytes = send(socket_fd, buffer + sent, size - sent, 0);
+    while (enviados < tamano) {
+        int bytes = send(descriptor_socket, bufer + enviados, tamano - enviados, 0);
         if (bytes <= 0) {
             return 0;
         }
-        sent += bytes;
+        enviados += bytes;
     }
 
     return 1;
 }
 
-static int send_message(SOCKET socket_fd, unsigned char type,
-                        const unsigned char *payload, unsigned short payload_size)
+static int enviar_mensaje(SOCKET descriptor_socket, unsigned char tipo,
+                        const unsigned char *carga_util, unsigned short tamano_carga)
 {
-    unsigned char header[HEADER_SIZE];
+    unsigned char encabezado[TAMANO_ENCABEZADO];
 
-    header[0] = type;
-    header[1] = (unsigned char)((payload_size >> 8) & 0xFF);
-    header[2] = (unsigned char)(payload_size & 0xFF);
+    encabezado[0] = tipo;
+    encabezado[1] = (unsigned char)((tamano_carga >> 8) & 0xFF);
+    encabezado[2] = (unsigned char)(tamano_carga & 0xFF);
 
-    if (!send_all(socket_fd, (const char *)header, HEADER_SIZE)) {
+    if (!enviar_todo(descriptor_socket, (const char *)encabezado, TAMANO_ENCABEZADO)) {
         return 0;
     }
-
-    if (payload_size > 0 && payload != NULL) {
-        return send_all(socket_fd, (const char *)payload, payload_size);
+    if (tamano_carga > 0 && carga_util != NULL) {
+        if (!enviar_todo(descriptor_socket, (const char *)carga_util, tamano_carga)) {
+            return 0;
+        }
     }
 
+    registrar_evento("Respuesta enviada: %s.", nombre_tipo_mensaje(tipo));
     return 1;
 }
 
-static void initialize_state(struct GameState *state)
+static void iniciar_estado(struct EstadoJuego *estado)
 {
-    state->left_paddle_y = INITIAL_PADDLE_Y;
-    state->right_paddle_y = INITIAL_PADDLE_Y;
-    state->ball_x = GAME_WIDTH / 2;
-    state->ball_y = GAME_HEIGHT / 2;
-    state->ball_dx = 1;
-    state->ball_dy = 1;
-    state->left_score = 0;
-    state->right_score = 0;
+    estado->paleta_izquierda_y = POSICION_INICIAL_PALETA;
+    estado->paleta_derecha_y = POSICION_INICIAL_PALETA;
+    estado->pelota_x = ANCHO_TABLERO / 2;
+    estado->pelota_y = ALTO_TABLERO / 2;
+    estado->pelota_dx = 1;
+    estado->pelota_dy = 1;
+    estado->marcador_izquierdo = 0;
+    estado->marcador_derecho = 0;
 }
 
-static void reset_ball(struct GameState *state, signed char direction)
+static void reiniciar_pelota(struct EstadoJuego *estado, signed char direccion)
 {
-    state->ball_x = GAME_WIDTH / 2;
-    state->ball_y = GAME_HEIGHT / 2;
-    state->ball_dx = direction;
-    state->ball_dy = 1;
+    estado->pelota_x = ANCHO_TABLERO / 2;
+    estado->pelota_y = ALTO_TABLERO / 2;
+    estado->pelota_dx = direccion;
+    estado->pelota_dy = 1;
 }
 
-static void build_game_state_message(const struct GameState *state,
-                                     unsigned char *payload)
+static void construir_mensaje_estado(const struct EstadoJuego *estado,
+                                     unsigned char *carga_util)
 {
-    payload[0] = state->left_paddle_y;
-    payload[1] = state->right_paddle_y;
-    payload[2] = state->ball_x;
-    payload[3] = state->ball_y;
-    payload[4] = (unsigned char)state->ball_dx;
-    payload[5] = (unsigned char)state->ball_dy;
-    payload[6] = state->left_score;
-    payload[7] = state->right_score;
+    carga_util[0] = estado->paleta_izquierda_y;
+    carga_util[1] = estado->paleta_derecha_y;
+    carga_util[2] = estado->pelota_x;
+    carga_util[3] = estado->pelota_y;
+    carga_util[4] = (unsigned char)estado->pelota_dx;
+    carga_util[5] = (unsigned char)estado->pelota_dy;
+    carga_util[6] = estado->marcador_izquierdo;
+    carga_util[7] = estado->marcador_derecho;
 }
 
-static void send_error(SOCKET socket_fd, const char *message)
+static void enviar_error(SOCKET descriptor_socket, const char *mensaje)
 {
-    size_t length = strlen(message);
-    unsigned char payload[MAX_MESSAGE_SIZE];
+    size_t longitud = strlen(mensaje);
+    unsigned char carga_util[TAMANO_MAXIMO_MENSAJE];
 
-    if (length >= sizeof(payload)) {
-        length = sizeof(payload) - 1;
+    if (longitud >= sizeof(carga_util)) {
+        longitud = sizeof(carga_util) - 1;
     }
-    memcpy(payload, message, length);
-    payload[length] = '\0';
-    send_message(socket_fd, MESSAGE_ERROR, payload, (unsigned short)(length + 1));
+    memcpy(carga_util, mensaje, longitud);
+    carga_util[longitud] = '\0';
+    enviar_mensaje(descriptor_socket, MENSAJE_ERROR, carga_util, (unsigned short)(longitud + 1));
 }
 
-static void broadcast_state(struct Client clients[MAX_CLIENTS],
-                            const struct GameState *state)
+static void difundir_estado(struct Cliente clientes[MAXIMO_JUGADORES],
+                            const struct EstadoJuego *estado)
 {
-    unsigned char payload[GAME_STATE_SIZE];
-    int index;
+    unsigned char carga_util[TAMANO_ESTADO_JUEGO];
+    int indice;
 
-    build_game_state_message(state, payload);
-    for (index = 0; index < MAX_CLIENTS; index++) {
-        if (clients[index].connected && clients[index].registered) {
-            if (!send_message(clients[index].socket_fd, MESSAGE_GAME_STATE,
-                              payload, sizeof(payload))) {
-                clients[index].connected = 0;
+    construir_mensaje_estado(estado, carga_util);
+    for (indice = 0; indice < MAXIMO_JUGADORES; indice++) {
+        if (clientes[indice].conectado && clientes[indice].registrado) {
+            if (!enviar_mensaje(clientes[indice].descriptor_socket, MENSAJE_ESTADO_JUEGO,
+                              carga_util, sizeof(carga_util))) {
+                clientes[indice].conectado = 0;
             }
         }
     }
 }
 
-static int find_free_client(struct Client clients[MAX_CLIENTS])
+static int buscar_cliente_libre(struct Cliente clientes[MAXIMO_JUGADORES])
 {
-    int index;
+    int indice;
 
-    for (index = 0; index < MAX_CLIENTS; index++) {
-        if (!clients[index].connected) {
-            return index;
+    for (indice = 0; indice < MAXIMO_JUGADORES; indice++) {
+        if (!clientes[indice].conectado) {
+            return indice;
         }
     }
     return -1;
 }
 
-static int registered_count(struct Client clients[MAX_CLIENTS])
+static int contar_jugadores_registrados(struct Cliente clientes[MAXIMO_JUGADORES])
 {
-    int index;
-    int count = 0;
+    int indice;
+    int cantidad = 0;
 
-    for (index = 0; index < MAX_CLIENTS; index++) {
-        if (clients[index].connected && clients[index].registered) {
-            count++;
+    for (indice = 0; indice < MAXIMO_JUGADORES; indice++) {
+        if (clientes[indice].conectado && clientes[indice].registrado) {
+            cantidad++;
         }
     }
-    return count;
+    return cantidad;
 }
 
-static void disconnect_client(struct Client *client)
+static void desconectar_cliente(struct Cliente *Cliente)
 {
-    if (client->connected) {
-        log_event("Jugador desconectado: %s",
-                  client->nickname[0] ? client->nickname : "sin registrar");
-        CLOSE_SOCKET(client->socket_fd);
+    if (Cliente->conectado) {
+        registrar_evento("Jugador desconectado: %s",
+                  Cliente->apodo[0] ? Cliente->apodo : "sin registrar");
+        CLOSE_SOCKET(Cliente->descriptor_socket);
     }
-    memset(client, 0, sizeof(*client));
-    client->socket_fd = INVALID_SOCKET;
+    memset(Cliente, 0, sizeof(*Cliente));
+    Cliente->descriptor_socket = INVALID_SOCKET;
 }
 
-static int parse_registration(struct Client *client,
-                              const unsigned char *payload,
-                              unsigned short payload_size)
+static int analizar_registro(struct Cliente *Cliente,
+                              const unsigned char *carga_util,
+                              unsigned short tamano_carga)
 {
-    char buffer[MAX_MESSAGE_SIZE];
-    char *email;
-    size_t used;
+    char bufer[TAMANO_MAXIMO_MENSAJE];
+    char *correo;
+    size_t usados;
 
-    if (payload == NULL || payload_size == 0 || payload_size >= sizeof(buffer)) {
-        send_error(client->socket_fd, "Datos de registro invalidos.");
+    if (carga_util == NULL || tamano_carga == 0 || tamano_carga >= sizeof(bufer)) {
+        enviar_error(Cliente->descriptor_socket, "Datos de registro invalidos.");
         return 0;
     }
 
-    used = payload_size;
-    memcpy(buffer, payload, used);
-    buffer[used] = '\0';
-    email = strchr(buffer, '\0');
+    usados = tamano_carga;
+    memcpy(bufer, carga_util, usados);
+    bufer[usados] = '\0';
+    correo = strchr(bufer, '\0');
 
-    if (buffer[0] == '\0') {
-        send_error(client->socket_fd, "El nickname no puede estar vacio.");
+    if (bufer[0] == '\0') {
+        enviar_error(Cliente->descriptor_socket, "El apodo no puede estar vacio.");
         return 0;
     }
-    if (email == NULL || email[1] == '\0' || strchr(email + 1, '@') == NULL) {
-        send_error(client->socket_fd, "El correo electronico es invalido.");
+    if (correo == NULL || correo[1] == '\0' || strchr(correo + 1, '@') == NULL) {
+        enviar_error(Cliente->descriptor_socket, "El correo electronico es invalido.");
         return 0;
     }
 
-    strncpy(client->nickname, buffer, sizeof(client->nickname) - 1);
-    client->nickname[sizeof(client->nickname) - 1] = '\0';
-    client->registered = 1;
-    log_event("Jugador %d registrado: %s", client->side + 1, client->nickname);
-    return send_message(client->socket_fd, MESSAGE_ACK, NULL, 0);
+    strncpy(Cliente->apodo, bufer, sizeof(Cliente->apodo) - 1);
+    Cliente->apodo[sizeof(Cliente->apodo) - 1] = '\0';
+    Cliente->registrado = 1;
+    registrar_evento("Jugador %d registrado: %s", Cliente->lado + 1, Cliente->apodo);
+    return enviar_mensaje(Cliente->descriptor_socket, MENSAJE_CONFIRMACION, NULL, 0);
 }
 
-static int move_paddle(struct Client *client, struct GameState *state,
-                       unsigned char message_type)
+static int mover_paleta(struct Cliente *Cliente, struct EstadoJuego *estado,
+                       unsigned char tipo_mensaje)
 {
-    unsigned char *paddle;
-    unsigned char previous_position;
+    unsigned char *paleta;
+    unsigned char posicion_anterior;
 
-    paddle = client->side == 0
-        ? &state->left_paddle_y
-        : &state->right_paddle_y;
-    previous_position = *paddle;
+    paleta = Cliente->lado == 0
+        ? &estado->paleta_izquierda_y
+        : &estado->paleta_derecha_y;
+    posicion_anterior = *paleta;
 
-    if (message_type == MESSAGE_MOVE_UP && *paddle > 0) {
-        (*paddle)--;
-    } else if (message_type == MESSAGE_MOVE_DOWN &&
-               *paddle + PADDLE_HEIGHT < GAME_HEIGHT) {
-        (*paddle)++;
+    if (tipo_mensaje == MENSAJE_MOVER_ARRIBA && *paleta > 0) {
+        (*paleta)--;
+    } else if (tipo_mensaje == MENSAJE_MOVER_ABAJO &&
+               *paleta + ALTO_PALETA < ALTO_TABLERO) {
+        (*paleta)++;
     }
-    return *paddle != previous_position;
+    return *paleta != posicion_anterior;
 }
 
-static int update_ball(struct GameState *state)
+static int actualizar_pelota(struct EstadoJuego *estado)
 {
-    int next_x = state->ball_x + state->ball_dx;
-    int next_y = state->ball_y + state->ball_dy;
+    int siguiente_x = estado->pelota_x + estado->pelota_dx;
+    int siguiente_y = estado->pelota_y + estado->pelota_dy;
 
-    if (next_y <= 0 || next_y >= GAME_HEIGHT - 1) {
-        state->ball_dy = (signed char)-state->ball_dy;
-        next_y = state->ball_y + state->ball_dy;
+    if (siguiente_y <= 0 || siguiente_y >= ALTO_TABLERO - 1) {
+        estado->pelota_dy = (signed char)-estado->pelota_dy;
+        siguiente_y = estado->pelota_y + estado->pelota_dy;
     }
 
-    if (next_x <= 0) {
-        if (next_y >= state->left_paddle_y &&
-            next_y < state->left_paddle_y + PADDLE_HEIGHT) {
-            state->ball_dx = 1;
-            next_x = 1;
+    if (siguiente_x <= 0) {
+        if (siguiente_y >= estado->paleta_izquierda_y &&
+            siguiente_y < estado->paleta_izquierda_y + ALTO_PALETA) {
+            estado->pelota_dx = 1;
+            siguiente_x = 1;
         } else {
-            state->right_score++;
-            reset_ball(state, 1);
+            estado->marcador_derecho++;
+            reiniciar_pelota(estado, 1);
             return 2;
         }
-    } else if (next_x >= GAME_WIDTH - 1) {
-        if (next_y >= state->right_paddle_y &&
-            next_y < state->right_paddle_y + PADDLE_HEIGHT) {
-            state->ball_dx = -1;
-            next_x = GAME_WIDTH - 2;
+    } else if (siguiente_x >= ANCHO_TABLERO - 1) {
+        if (siguiente_y >= estado->paleta_derecha_y &&
+            siguiente_y < estado->paleta_derecha_y + ALTO_PALETA) {
+            estado->pelota_dx = -1;
+            siguiente_x = ANCHO_TABLERO - 2;
         } else {
-            state->left_score++;
-            reset_ball(state, -1);
+            estado->marcador_izquierdo++;
+            reiniciar_pelota(estado, -1);
             return 1;
         }
     }
 
-    state->ball_x = (unsigned char)next_x;
-    state->ball_y = (unsigned char)next_y;
+    estado->pelota_x = (unsigned char)siguiente_x;
+    estado->pelota_y = (unsigned char)siguiente_y;
     return 0;
 }
 
-static int handle_client_message(struct Client clients[MAX_CLIENTS],
-                                 int client_index,
-                                 struct GameState *state)
+static int procesar_mensaje_cliente(struct Cliente clientes[MAXIMO_JUGADORES],
+                                 int indice_cliente,
+                                 struct EstadoJuego *estado)
 {
-    struct Client *client = &clients[client_index];
-    unsigned char header[HEADER_SIZE];
-    unsigned char *payload = NULL;
-    unsigned short payload_size;
-    int result = 1;
+    struct Cliente *Cliente = &clientes[indice_cliente];
+    unsigned char encabezado[TAMANO_ENCABEZADO];
+    unsigned char *carga_util = NULL;
+    unsigned short tamano_carga;
+    int resultado = 1;
 
-    if (!receive_all(client->socket_fd, (char *)header, HEADER_SIZE)) {
+    if (!recibir_todo(Cliente->descriptor_socket, (char *)encabezado, TAMANO_ENCABEZADO)) {
         return 0;
     }
 
-    payload_size = (unsigned short)((header[1] << 8) | header[2]);
-    if (payload_size > 0) {
-        payload = (unsigned char *)malloc(payload_size);
-        if (payload == NULL ||
-            !receive_all(client->socket_fd, (char *)payload, payload_size)) {
-            free(payload);
+    tamano_carga = (unsigned short)((encabezado[1] << 8) | encabezado[2]);
+    registrar_evento("Peticion recibida: %s (%u bytes).",
+                     nombre_tipo_mensaje(encabezado[0]), tamano_carga);
+    if (tamano_carga > 0) {
+        carga_util = (unsigned char *)malloc(tamano_carga);
+        if (carga_util == NULL ||
+            !recibir_todo(Cliente->descriptor_socket, (char *)carga_util, tamano_carga)) {
+            free(carga_util);
             return 0;
         }
     }
 
-    if (header[0] == MESSAGE_HELLO && payload_size == 0) {
-        log_event("HELLO recibido del jugador %d.", client->side + 1);
-        result = send_message(client->socket_fd, MESSAGE_ACK, NULL, 0);
-    } else if (header[0] == MESSAGE_REGISTER && !client->registered) {
-        result = parse_registration(client, payload, payload_size);
-        if (result) {
-            broadcast_state(clients, state);
+    if (encabezado[0] == MENSAJE_SALUDO && tamano_carga == 0) {
+        registrar_evento("HELLO recibido del jugador %d.", Cliente->lado + 1);
+        resultado = enviar_mensaje(Cliente->descriptor_socket, MENSAJE_CONFIRMACION, NULL, 0);
+    } else if (encabezado[0] == MENSAJE_REGISTRO && !Cliente->registrado) {
+        resultado = analizar_registro(Cliente, carga_util, tamano_carga);
+        if (resultado) {
+            difundir_estado(clientes, estado);
         }
-    } else if (client->registered &&
-               (header[0] == MESSAGE_MOVE_UP || header[0] == MESSAGE_MOVE_DOWN) &&
-               payload_size == 0) {
-        int moved = move_paddle(client, state, header[0]);
-        log_event("Movimiento %s de %s: %s.",
-                  header[0] == MESSAGE_MOVE_UP ? "arriba" : "abajo",
-                  client->nickname,
-                  moved ? "aceptado" : "limite alcanzado");
-        broadcast_state(clients, state);
+    } else if (Cliente->registrado &&
+               (encabezado[0] == MENSAJE_MOVER_ARRIBA || encabezado[0] == MENSAJE_MOVER_ABAJO) &&
+               tamano_carga == 0) {
+        int movio = mover_paleta(Cliente, estado, encabezado[0]);
+        registrar_evento("Movimiento %s de %s: %s.",
+                  encabezado[0] == MENSAJE_MOVER_ARRIBA ? "arriba" : "abajo",
+                  Cliente->apodo,
+                  movio ? "aceptado" : "limite alcanzado");
+        difundir_estado(clientes, estado);
     } else {
-        log_event("Mensaje no soportado del jugador %d.", client->side + 1);
-        send_error(client->socket_fd, "Mensaje no soportado.");
+        registrar_evento("Mensaje no soportado del jugador %d.", Cliente->lado + 1);
+        enviar_error(Cliente->descriptor_socket, "Mensaje no soportado.");
     }
 
-    free(payload);
-    return result;
+    free(carga_util);
+    return resultado;
 }
 
-int main(void)
+int main(int cantidad_argumentos, char *argumentos[])
 {
-    SOCKET server_socket;
-    struct sockaddr_in server_address;
-    struct Client clients[MAX_CLIENTS];
-    struct GameState state;
-    int index;
-    int last_tick;
-    int point_winner;
+    SOCKET socket_servidor;
+    struct sockaddr_in direccion_servidor;
+    struct Cliente clientes[MAXIMO_JUGADORES];
+    struct EstadoJuego estado;
+    int indice;
+    int ultimo_tick;
+    int ganador_punto;
+    char *fin_puerto;
+    long puerto;
 
 #ifdef _WIN32
-    WSADATA data;
-    WSAStartup(MAKEWORD(2, 2), &data);
+    WSADATA datos;
+    WSAStartup(MAKEWORD(2, 2), &datos);
 #endif
 
-    if (!initialize_logger()) {
+    if (cantidad_argumentos != 3) {
+        fprintf(stderr, "Uso: %s <PUERTO> <ARCHIVO_LOG>\n", argumentos[0]);
 #ifdef _WIN32
         WSACleanup();
 #endif
         return 1;
     }
 
-    memset(clients, 0, sizeof(clients));
-    for (index = 0; index < MAX_CLIENTS; index++) {
-        clients[index].socket_fd = INVALID_SOCKET;
-    }
-    initialize_state(&state);
-
-    server_socket = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_socket == INVALID_SOCKET) {
-        log_event("No se pudo crear el socket.");
-        close_logger();
+    puerto = strtol(argumentos[1], &fin_puerto, 10);
+    if (*argumentos[1] == '\0' || *fin_puerto != '\0' ||
+        puerto < 1 || puerto > 65535) {
+        fprintf(stderr, "El puerto debe ser un numero entre 1 y 65535.\n");
+#ifdef _WIN32
+        WSACleanup();
+#endif
         return 1;
     }
 
-    memset(&server_address, 0, sizeof(server_address));
-    server_address.sin_family = AF_INET;
-    server_address.sin_addr.s_addr = htonl(INADDR_ANY);
-    server_address.sin_port = htons(PORT);
-
-    if (bind(server_socket, (struct sockaddr *)&server_address,
-             sizeof(server_address)) < 0 ||
-        listen(server_socket, MAX_CLIENTS) < 0) {
-        log_event("No se pudo iniciar el servidor en el puerto %d.", PORT);
-        CLOSE_SOCKET(server_socket);
-        close_logger();
+    if (!iniciar_registro(argumentos[2])) {
+#ifdef _WIN32
+        WSACleanup();
+#endif
         return 1;
     }
 
-    log_event("Servidor Pong escuchando en el puerto %d.", PORT);
-    log_event("Esperando hasta %d jugadores.", MAX_CLIENTS);
-    last_tick = (int)time(NULL);
+    memset(clientes, 0, sizeof(clientes));
+    for (indice = 0; indice < MAXIMO_JUGADORES; indice++) {
+        clientes[indice].descriptor_socket = INVALID_SOCKET;
+    }
+    iniciar_estado(&estado);
+
+    socket_servidor = socket(AF_INET, SOCK_STREAM, 0);
+    if (socket_servidor == INVALID_SOCKET) {
+        registrar_evento("No se pudo crear el socket.");
+        cerrar_registro();
+        return 1;
+    }
+
+    memset(&direccion_servidor, 0, sizeof(direccion_servidor));
+    direccion_servidor.sin_family = AF_INET;
+    direccion_servidor.sin_addr.s_addr = htonl(INADDR_ANY);
+    direccion_servidor.sin_port = htons((unsigned short)puerto);
+
+    if (bind(socket_servidor, (struct sockaddr *)&direccion_servidor,
+             sizeof(direccion_servidor)) < 0 ||
+        listen(socket_servidor, MAXIMO_JUGADORES) < 0) {
+        registrar_evento("No se pudo iniciar el servidor en el puerto %ld.", puerto);
+        CLOSE_SOCKET(socket_servidor);
+        cerrar_registro();
+        return 1;
+    }
+
+    registrar_evento("Servidor Pong escuchando en el puerto %ld.", puerto);
+    registrar_evento("Esperando hasta %d jugadores.", MAXIMO_JUGADORES);
+    ultimo_tick = (int)time(NULL);
 
     while (1) {
-        fd_set read_set;
-        struct timeval timeout;
-        SOCKET max_socket = server_socket;
-        int ready;
+        fd_set conjunto_lectura;
+        struct timeval tiempo_espera;
+        SOCKET socket_maximo = socket_servidor;
+        int listos;
 
-        FD_ZERO(&read_set);
-        FD_SET(server_socket, &read_set);
-        for (index = 0; index < MAX_CLIENTS; index++) {
-            if (clients[index].connected) {
-                FD_SET(clients[index].socket_fd, &read_set);
-                if (clients[index].socket_fd > max_socket) {
-                    max_socket = clients[index].socket_fd;
+        FD_ZERO(&conjunto_lectura);
+        FD_SET(socket_servidor, &conjunto_lectura);
+        for (indice = 0; indice < MAXIMO_JUGADORES; indice++) {
+            if (clientes[indice].conectado) {
+                FD_SET(clientes[indice].descriptor_socket, &conjunto_lectura);
+                if (clientes[indice].descriptor_socket > socket_maximo) {
+                    socket_maximo = clientes[indice].descriptor_socket;
                 }
             }
         }
 
-        timeout.tv_sec = 0;
-        timeout.tv_usec = GAME_TICK_MS * 1000;
-        ready = select((int)max_socket + 1, &read_set, NULL, NULL, &timeout);
-        if (ready < 0) {
-            log_event("Error al esperar conexiones: %d", SOCKET_ERROR_CODE);
+        tiempo_espera.tv_sec = 0;
+        tiempo_espera.tv_usec = INTERVALO_JUEGO_MS * 1000;
+        listos = select((int)socket_maximo + 1, &conjunto_lectura, NULL, NULL, &tiempo_espera);
+        if (listos < 0) {
+            registrar_evento("Error al esperar conexiones: %d", SOCKET_ERROR_CODE);
             break;
         }
 
-        if (FD_ISSET(server_socket, &read_set)) {
-            SOCKET client_socket = accept(server_socket, NULL, NULL);
-            int free_index = find_free_client(clients);
+        if (FD_ISSET(socket_servidor, &conjunto_lectura)) {
+            SOCKET socket_cliente = accept(socket_servidor, NULL, NULL);
+            int indice_libre = buscar_cliente_libre(clientes);
 
-            if (client_socket != INVALID_SOCKET && free_index >= 0) {
-                clients[free_index].socket_fd = client_socket;
-                clients[free_index].connected = 1;
-                clients[free_index].side = free_index;
-                log_event("Conexion recibida para jugador %d.", free_index + 1);
-            } else if (client_socket != INVALID_SOCKET) {
-                log_event("Conexion rechazada: la partida esta llena.");
-                send_error(client_socket, "La partida ya esta llena.");
-                CLOSE_SOCKET(client_socket);
+            if (socket_cliente != INVALID_SOCKET && indice_libre >= 0) {
+                clientes[indice_libre].descriptor_socket = socket_cliente;
+                clientes[indice_libre].conectado = 1;
+                clientes[indice_libre].lado = indice_libre;
+                registrar_evento("Conexion recibida para jugador %d.", indice_libre + 1);
+            } else if (socket_cliente != INVALID_SOCKET) {
+                registrar_evento("Conexion rechazada: la partida esta llena.");
+                enviar_error(socket_cliente, "La partida ya esta llena.");
+                CLOSE_SOCKET(socket_cliente);
             }
         }
 
-        for (index = 0; index < MAX_CLIENTS; index++) {
-            if (clients[index].connected &&
-                FD_ISSET(clients[index].socket_fd, &read_set) &&
-                !handle_client_message(clients, index, &state)) {
-                disconnect_client(&clients[index]);
+        for (indice = 0; indice < MAXIMO_JUGADORES; indice++) {
+            if (clientes[indice].conectado &&
+                FD_ISSET(clientes[indice].descriptor_socket, &conjunto_lectura) &&
+                !procesar_mensaje_cliente(clientes, indice, &estado)) {
+                desconectar_cliente(&clientes[indice]);
             }
         }
 
-        if ((int)time(NULL) != last_tick) {
-            last_tick = (int)time(NULL);
-            if (registered_count(clients) > 0) {
-                point_winner = update_ball(&state);
-                if (point_winner == 1) {
-                    log_event("Punto para el jugador izquierdo. Marcador %d-%d.",
-                              state.left_score, state.right_score);
-                } else if (point_winner == 2) {
-                    log_event("Punto para el jugador derecho. Marcador %d-%d.",
-                              state.left_score, state.right_score);
+        if ((int)time(NULL) != ultimo_tick) {
+            ultimo_tick = (int)time(NULL);
+            if (contar_jugadores_registrados(clientes) > 0) {
+                ganador_punto = actualizar_pelota(&estado);
+                if (ganador_punto == 1) {
+                    registrar_evento("Punto para el jugador izquierdo. Marcador %d-%d.",
+                              estado.marcador_izquierdo, estado.marcador_derecho);
+                } else if (ganador_punto == 2) {
+                    registrar_evento("Punto para el jugador derecho. Marcador %d-%d.",
+                              estado.marcador_izquierdo, estado.marcador_derecho);
                 }
-                broadcast_state(clients, &state);
+                difundir_estado(clientes, &estado);
             }
         }
     }
 
-    for (index = 0; index < MAX_CLIENTS; index++) {
-        disconnect_client(&clients[index]);
+    for (indice = 0; indice < MAXIMO_JUGADORES; indice++) {
+        desconectar_cliente(&clientes[indice]);
     }
-    CLOSE_SOCKET(server_socket);
-    close_logger();
+    CLOSE_SOCKET(socket_servidor);
+    cerrar_registro();
 
 #ifdef _WIN32
     WSACleanup();
